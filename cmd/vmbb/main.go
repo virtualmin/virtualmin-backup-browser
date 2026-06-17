@@ -8,8 +8,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/virtualmin/virtualmin-backup-browser/internal/archive"
 	"github.com/virtualmin/virtualmin-backup-browser/internal/backup"
@@ -240,7 +242,7 @@ var infoFields = []struct{ key, label string }{
 	{"parent", "Parent domain ID"},
 	{"template", "Template ID"},
 	{"plan", "Plan ID"},
-	{"created", "Created (epoch)"},
+	{"created", "Created"},
 }
 
 func printDomainInfo(b *backup.Backup, d *backup.Domain) {
@@ -252,6 +254,9 @@ func printDomainInfo(b *backup.Backup, d *backup.Domain) {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		for _, f := range infoFields {
 			if v, ok := conf[f.key]; ok && v != "" {
+				if f.key == "created" {
+					v = formatEpoch(v)
+				}
 				fmt.Fprintf(tw, "  %s\t%s\n", f.label, v)
 			}
 		}
@@ -529,4 +534,14 @@ func humanSize(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// formatEpoch renders a Unix-timestamp string as a human-readable local
+// datestamp, falling back to the original value if it isn't a plain integer.
+func formatEpoch(s string) string {
+	secs, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return s
+	}
+	return time.Unix(secs, 0).Format("2006-01-02 15:04:05 MST")
 }
