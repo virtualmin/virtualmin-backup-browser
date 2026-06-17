@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -27,10 +28,13 @@ Usage:
   vmbb list <backup>              Summarise domains and features
   vmbb tree <backup> [--deep]     List every member (--deep recurses nested archives)
   vmbb info <backup> [domain]     Show decoded domain metadata
+  vmbb categorize <backup> [domain]   Group backed-up data by where it restores
   vmbb cat <backup> <entry>       Write a member to stdout (nested: outer::inner)
   vmbb extract <backup> <entry> [-o dir]   Extract a member to disk
 
-Supported containers: .tar, .tar.gz, .tar.bz2, .tar.zst, .zip
+<backup> may be a single archive file or a directory-format backup (a directory
+of per-domain archives). Supported containers: .tar, .tar.gz, .tar.bz2,
+.tar.zst, .zip
 `
 
 func main() {
@@ -47,6 +51,8 @@ func main() {
 		err = cmdTree(args)
 	case "info":
 		err = cmdInfo(args)
+	case "categorize", "categorise":
+		err = cmdCategorize(args)
 	case "cat":
 		err = cmdCat(args)
 	case "extract":
@@ -126,26 +132,60 @@ func cmdTree(args []string) error {
 	if pathArg == "" {
 		return fmt.Errorf("usage: vmbb tree <backup> [--deep]")
 	}
+	b, err := backup.Open(pathArg)
+	if err != nil {
+		return err
+	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	defer tw.Flush()
-	return archive.WalkFile(pathArg, func(e archive.Entry) error {
-		if e.IsDir {
-			fmt.Fprintf(tw, "%s\t<dir>\n", e.Name)
-			return nil
+	for _, src := range sourcePaths(b) {
+		if b.IsDir {
+			fmt.Printf("%s:\n", filepath.Base(src))
 		}
-		fmt.Fprintf(tw, "%s\t%s\n", e.Name, humanSize(e.Size))
-		if deep && backup.ParseMember(e.Name, e.Size, false).IsNested {
-			return archive.WalkNested(e.Reader, func(ne archive.Entry) error {
-				if ne.IsDir {
-					return nil
-				}
-				fmt.Fprintf(tw, "  %s::%s\t%s\n", e.Name, ne.Name, humanSize(ne.Size))
+		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		err := archive.WalkFile(src, func(e archive.Entry) error {
+			if e.IsDir {
+				fmt.Fprintf(tw, "%s\t<dir>\n", e.Name)
 				return nil
-			})
+			}
+			fmt.Fprintf(tw, "%s\t%s\n", e.Name, humanSize(e.Size))
+			if deep && backup.ParseMember(e.Name, e.Size, false).IsNested {
+				return archive.WalkNested(e.Reader, func(ne archive.Entry) error {
+					if ne.IsDir {
+						return nil
+					}
+					fmt.Fprintf(tw, "  %s::%s\t%s\n", e.Name, ne.Name, humanSize(ne.Size))
+					return nil
+				})
+			}
+			return nil
+		})
+		tw.Flush()
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+// sourcePaths returns the distinct archive files backing a backup, in the order
+// members were read. A single-file backup yields just its own path.
+func sourcePaths(b *backup.Backup) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range b.Members {
+		p := m.SourcePath
+		if p == "" {
+			p = b.Path
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, b.Path)
+	}
+	return out
 }
 
 func cmdInfo(args []string) error {
@@ -172,7 +212,7 @@ func cmdInfo(args []string) error {
 		if printed > 0 {
 			fmt.Println()
 		}
-		printDomainInfo(b.Path, d)
+		printDomainInfo(b, d)
 		printed++
 	}
 	if want != "" && printed == 0 {
@@ -197,13 +237,12 @@ var infoFields = []struct{ key, label string }{
 	{"created", "Created (epoch)"},
 }
 
-func printDomainInfo(backupPath string, d *backup.Domain) {
+func printDomainInfo(b *backup.Backup, d *backup.Domain) {
 	fmt.Printf("== %s ==\n", d.Name)
 
-	// The <domain>_virtualmin member holds the domain's key=value metadata.
-	metaName := d.Name + "_virtualmin"
-	if data, err := backup.ReadMember(backupPath, metaName); err == nil {
-		conf := backup.ParseConfig(data)
+	// Prefer the .dom sidecar (directory format); fall back to the
+	// <domain>_virtualmin member written inside every backup.
+	if conf, err := b.DomainMeta(d.Name); err == nil {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		for _, f := range infoFields {
 			if v, ok := conf[f.key]; ok && v != "" {
@@ -212,7 +251,7 @@ func printDomainInfo(backupPath string, d *backup.Domain) {
 		}
 		tw.Flush()
 	} else {
-		fmt.Printf("  (no %s metadata member)\n", metaName)
+		fmt.Printf("  (no metadata for %s)\n", d.Name)
 	}
 
 	labels := make([]string, len(d.Features))
@@ -222,11 +261,83 @@ func printDomainInfo(backupPath string, d *backup.Domain) {
 	fmt.Printf("  Backed-up data: %s\n", strings.Join(labels, ", "))
 }
 
+func cmdCategorize(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("usage: vmbb categorize <backup> [domain]")
+	}
+	b, err := backup.Open(args[0])
+	if err != nil {
+		return err
+	}
+	want := ""
+	if len(args) == 2 {
+		want = args[1]
+	}
+
+	// Group (domain, feature) pairs by the category they restore into.
+	type row struct{ domain, label, location string }
+	byCat := map[string][]row{}
+	matched := false
+	for _, d := range b.Domains() {
+		if d.Name == "virtualmin" {
+			continue // system-wide config, reported separately below
+		}
+		if want != "" && d.Name != want {
+			continue
+		}
+		matched = true
+		for _, id := range d.Features {
+			f := backup.LookupFeature(id)
+			byCat[f.Category] = append(byCat[f.Category],
+				row{d.Name, f.Label, f.Location})
+		}
+	}
+	if want != "" && !matched {
+		return fmt.Errorf("domain %q not found in backup", want)
+	}
+
+	fmt.Printf("Backup:  %s\n", b.Path)
+	fmt.Println("Where this backup's data restores on a live system:")
+	for _, cat := range backup.CategoryOrder {
+		rows := byCat[cat]
+		if len(rows) == 0 {
+			continue
+		}
+		fmt.Printf("\n%s\n", cat)
+		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		for _, r := range rows {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", r.domain, r.label, r.location)
+		}
+		tw.Flush()
+	}
+
+	if want == "" {
+		if g := globalConfig(b); g != nil {
+			fmt.Printf("\nSystem-wide Virtualmin config (%d member(s)): restored by Virtualmin itself, not per-domain.\n", len(g.Members))
+		}
+	}
+	return nil
+}
+
+// globalConfig returns the virtualmin pseudo-domain, if present.
+func globalConfig(b *backup.Backup) *backup.Domain {
+	for _, d := range b.Domains() {
+		if d.Name == "virtualmin" {
+			return d
+		}
+	}
+	return nil
+}
+
 func cmdCat(args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: vmbb cat <backup> <entry>")
 	}
-	return findMember(args[0], args[1], func(r io.Reader) error {
+	b, err := backup.Open(args[0])
+	if err != nil {
+		return err
+	}
+	return findMember(b, args[1], func(r io.Reader) error {
 		_, err := io.Copy(os.Stdout, r)
 		return err
 	})
@@ -256,8 +367,12 @@ func cmdExtract(args []string) error {
 	if outDir == "" {
 		outDir = "."
 	}
+	b, err := backup.Open(pathArg)
+	if err != nil {
+		return err
+	}
 	dest := path.Join(outDir, path.Base(strings.ReplaceAll(entry, "::", "/")))
-	return findMember(pathArg, entry, func(r io.Reader) error {
+	return findMember(b, entry, func(r io.Reader) error {
 		f, err := os.Create(dest)
 		if err != nil {
 			return err
@@ -273,18 +388,15 @@ func cmdExtract(args []string) error {
 
 // findMember locates entry within the backup and invokes fn with its content
 // reader. A "outer::inner" entry descends one level into a nested archive.
-func findMember(backupPath, entry string, fn func(io.Reader) error) error {
+func findMember(b *backup.Backup, entry string, fn func(io.Reader) error) error {
 	outer, inner, nested := strings.Cut(entry, "::")
 	var cberr error
 	found := false
-	err := archive.WalkFile(backupPath, func(e archive.Entry) error {
-		if e.Name != outer {
-			return nil
-		}
+	err := b.WalkMember(outer, func(e archive.Entry) error {
 		found = true
 		if !nested {
 			cberr = fn(e.Reader)
-			return archive.SkipEntry
+			return nil
 		}
 		innerFound := false
 		cberr = archive.WalkNested(e.Reader, func(ne archive.Entry) error {
@@ -300,7 +412,7 @@ func findMember(backupPath, entry string, fn func(io.Reader) error) error {
 		if cberr == nil && !innerFound {
 			cberr = fmt.Errorf("nested entry %q not found in %q", inner, outer)
 		}
-		return archive.SkipEntry
+		return nil
 	})
 	if err != nil {
 		return err

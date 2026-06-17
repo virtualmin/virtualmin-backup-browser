@@ -25,6 +25,11 @@ type Member struct {
 	IsDir    bool
 	IsNested bool // the member is itself an archive (e.g. <domain>_dir.tar)
 	IsGlobal bool // a virtualmin_* global-config member
+
+	// SourcePath is the filesystem path of the archive file this member was
+	// read from. For a single-file backup every member shares the backup path;
+	// for a directory-format backup it is the per-domain archive.
+	SourcePath string
 }
 
 // ParseMember splits a cleaned archive entry name into its components.

@@ -29,9 +29,16 @@ Compression is detected by magic bytes, not the filename.
 ```
 vmbb list <backup>              Summarise domains and features
 vmbb tree <backup> [--deep]     List every member (--deep recurses nested archives)
+vmbb info <backup> [domain]     Show decoded domain metadata
+vmbb categorize <backup> [domain]   Group backed-up data by where it restores
 vmbb cat <backup> <entry>       Write a member to stdout (nested: outer::inner)
 vmbb extract <backup> <entry> [-o dir]   Extract a member to disk
 ```
+
+`<backup>` is either a single archive file or a **directory-format** backup —
+a directory of per-domain archives (`<domain>.tar.gz`) with `.info`/`.dom`
+sidecars. Members from every per-domain archive are aggregated, so the same
+commands work on both; `info` reads the richer `.dom` sidecar when present.
 
 A nested path uses `::` to descend one archive level, e.g.
 
@@ -92,10 +99,10 @@ config changes locally with `goreleaser check`.
 
 ## Status
 
-Implemented: format detection, the five containers, single-file backups,
-nested `_dir.tar` recursion, `list`/`tree`/`cat`/`extract`, the metadata decoder.
+Implemented: format detection, the five containers, single-file and
+directory-format backups, nested `_dir.tar` recursion,
+`list`/`tree`/`info`/`categorize`/`cat`/`extract`, `.dom`/`.info`
+serialise_variable decoding, feature-aware categorisation.
 
-Not yet implemented: directory-format and home-format browsing across a
-directory of per-domain archives; `info` (decoded `.dom`/`.info` display);
-feature-aware categorisation output; GPG-encrypted backups; GNU
-`--listed-incremental` differential metadata.
+Not yet implemented: GPG-encrypted backups; GNU `--listed-incremental`
+differential metadata.

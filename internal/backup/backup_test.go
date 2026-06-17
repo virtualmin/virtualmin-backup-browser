@@ -42,11 +42,11 @@ func makeBackup(t *testing.T) string {
 		".virtualmin-src":        "id=123",
 	})
 	outer := writeTar(t, map[string]string{
-		"example.com_dir.tar":     string(innerTar),
-		"example.com_mysql":       "hosts=localhost",
+		"example.com_dir.tar":      string(innerTar),
+		"example.com_mysql":        "hosts=localhost",
 		"example.com_mysql_maindb": "-- SQL dump\n",
-		"sub.example.com_dir.tar": string(writeTar(t, map[string]string{"index.html": "sub"})),
-		"virtualmin_config":       "key=value",
+		"sub.example.com_dir.tar":  string(writeTar(t, map[string]string{"index.html": "sub"})),
+		"virtualmin_config":        "key=value",
 	})
 
 	path := filepath.Join(t.TempDir(), "backup.tar.gz")
@@ -92,6 +92,69 @@ func TestOpenAndDomains(t *testing.T) {
 	if len(feats) != 2 || feats[0] != "dir" || feats[1] != "mysql" {
 		t.Errorf("example.com features = %v, want [dir mysql]", feats)
 	}
+}
+
+func TestOpenDirectoryFormat(t *testing.T) {
+	b, err := backup.Open("testdata/dirbackup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.IsDir {
+		t.Error("IsDir = false, want true for directory-format backup")
+	}
+	domains := b.Domains()
+	if len(domains) != 1 || domains[0].Name != "example.com" {
+		t.Fatalf("domains = %v, want [example.com]", domains)
+	}
+	wantFeat := []string{"mail", "mysql", "virtualmin"}
+	if got := domains[0].Features; !equalStrings(got, wantFeat) {
+		t.Errorf("features = %v, want %v", got, wantFeat)
+	}
+}
+
+func TestDomainMetaPrefersSidecar(t *testing.T) {
+	b, err := backup.Open("testdata/dirbackup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf, err := b.DomainMeta("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The .dom sidecar carries /home/exampleco; the in-archive _virtualmin
+	// member carries /home/FROM_MEMBER. The sidecar must win.
+	if conf["home"] != "/home/exampleco" {
+		t.Errorf("home = %q, want /home/exampleco (sidecar should win)", conf["home"])
+	}
+	if conf["uid"] != "5001" {
+		t.Errorf("uid = %q, want 5001 (sidecar-only field)", conf["uid"])
+	}
+}
+
+func TestReadMemberRoutesToSource(t *testing.T) {
+	b, err := backup.Open("testdata/dirbackup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := b.ReadMember("example.com_mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("hosts=127.0.0.1")) {
+		t.Errorf("example.com_mysql = %q, missing expected content", data)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestNestedWalk(t *testing.T) {
