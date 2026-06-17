@@ -32,8 +32,15 @@ vmbb tree <backup> [--deep]     List every member (--deep recurses nested archiv
 vmbb info <backup> [domain]     Show decoded domain metadata
 vmbb categorize <backup> [domain]   Group backed-up data by where it restores
 vmbb cat <backup> <entry>       Write a member to stdout (nested: outer::inner)
-vmbb extract <backup> <entry> [-o dir]   Extract a member to disk
+vmbb extract <backup> [entry] [-o dir] [--raw]   Extract to disk
 ```
+
+`extract` with no `entry` unpacks the **whole backup** into `-o` (default: the
+current directory), expanding nested archives — the home directory, the Webmin
+config tar — into subdirectories so everything is browsable as ordinary files.
+`--raw` leaves those as their original `.tar` files. Given an `entry` (a member
+name from `vmbb tree`), it extracts just that one member; `-o` directories are
+created as needed.
 
 `<backup>` is either a single archive file or a **directory-format** backup —
 a directory of per-domain archives (`<domain>.tar.gz`) with `.info`/`.dom`
