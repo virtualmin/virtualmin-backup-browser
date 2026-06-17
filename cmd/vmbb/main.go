@@ -30,7 +30,13 @@ Usage:
   vmbb info <backup> [domain]     Show decoded domain metadata
   vmbb categorize <backup> [domain]   Group backed-up data by where it restores
   vmbb cat <backup> <entry>       Write a member to stdout (nested: outer::inner)
-  vmbb extract <backup> <entry> [-o dir]   Extract a member to disk
+  vmbb extract <backup> [entry] [-o dir] [--raw]   Extract to disk
+
+extract with no <entry> unpacks the whole backup into -o (default: current
+directory), expanding nested archives such as the home directory into browsable
+subdirectories; --raw keeps those as their original .tar files. With an <entry>
+it extracts that single member. An <entry> is a member name as shown by
+'vmbb tree'; use outer::inner to reach inside a nested archive.
 
 <backup> may be a single archive file or a directory-format backup (a directory
 of per-domain archives). Supported containers: .tar, .tar.gz, .tar.bz2,
@@ -345,6 +351,7 @@ func cmdCat(args []string) error {
 
 func cmdExtract(args []string) error {
 	var pathArg, entry, outDir string
+	raw := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-o":
@@ -353,6 +360,8 @@ func cmdExtract(args []string) error {
 			}
 			i++
 			outDir = args[i]
+		case "--raw":
+			raw = true
 		default:
 			if pathArg == "" {
 				pathArg = args[i]
@@ -361,8 +370,8 @@ func cmdExtract(args []string) error {
 			}
 		}
 	}
-	if pathArg == "" || entry == "" {
-		return fmt.Errorf("usage: vmbb extract <backup> <entry> [-o dir]")
+	if pathArg == "" {
+		return fmt.Errorf("usage: vmbb extract <backup> [entry] [-o dir] [--raw]")
 	}
 	if outDir == "" {
 		outDir = "."
@@ -371,19 +380,105 @@ func cmdExtract(args []string) error {
 	if err != nil {
 		return err
 	}
-	dest := path.Join(outDir, path.Base(strings.ReplaceAll(entry, "::", "/")))
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	// No entry: dump the whole backup so it can be browsed on disk.
+	if entry == "" {
+		return extractAll(b, outDir, raw)
+	}
+
+	// A single named member (nested path "outer::inner" allowed).
+	dest := filepath.Join(outDir, path.Base(strings.ReplaceAll(entry, "::", "/")))
 	return findMember(b, entry, func(r io.Reader) error {
-		f, err := os.Create(dest)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := io.Copy(f, r); err != nil {
+		if err := writeFile(dest, r); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "extracted %s -> %s\n", entry, dest)
 		return nil
 	})
+}
+
+// extractAll writes every top-level member of the backup under outDir. Unless
+// raw is set, members that are themselves archives (the home directory, the
+// webmin config tar) are expanded into a directory named after the member, so
+// their contents are browsable as ordinary files.
+func extractAll(b *backup.Backup, outDir string, raw bool) error {
+	count := 0
+	write := func(rel string, r io.Reader) error {
+		dest, err := safeJoin(outDir, rel)
+		if err != nil {
+			return err
+		}
+		if err := writeFile(dest, r); err != nil {
+			return err
+		}
+		count++
+		return nil
+	}
+
+	for _, src := range sourcePaths(b) {
+		err := archive.WalkFile(src, func(e archive.Entry) error {
+			if e.IsDir {
+				return nil
+			}
+			if !raw && backup.ParseMember(e.Name, e.Size, false).IsNested {
+				base := stripArchiveSuffix(e.Name)
+				return archive.WalkNested(e.Reader, func(ne archive.Entry) error {
+					if ne.IsDir {
+						return nil
+					}
+					return write(path.Join(base, ne.Name), ne.Reader)
+				})
+			}
+			return write(e.Name, e.Reader)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(os.Stderr, "extracted %d file(s) to %s\n", count, outDir)
+	return nil
+}
+
+// nestedArchiveSuffixes mirrors the suffixes Virtualmin appends to a feature
+// file that is itself an archive.
+var nestedArchiveSuffixes = []string{".tar.gz", ".tar.bz2", ".tar.zst", ".tar", ".zip"}
+
+func stripArchiveSuffix(name string) string {
+	for _, sfx := range nestedArchiveSuffixes {
+		if s, ok := strings.CutSuffix(name, sfx); ok {
+			return s
+		}
+	}
+	return name
+}
+
+// writeFile creates dest (and any parent directories) and copies r into it.
+func writeFile(dest string, r io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, r)
+	return err
+}
+
+// safeJoin joins a member name onto base, refusing paths that would escape it
+// (guarding against "../" traversal in archive entry names).
+func safeJoin(base, name string) (string, error) {
+	clean := filepath.Clean("/" + filepath.FromSlash(name))
+	dest := filepath.Join(base, clean)
+	rel, err := filepath.Rel(base, dest)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing unsafe extraction path %q", name)
+	}
+	return dest, nil
 }
 
 // findMember locates entry within the backup and invokes fn with its content
