@@ -1,0 +1,97 @@
+# GoReleaser configuration for vmbb.
+# Cuts a GitHub release of cross-built binaries and updates the self-hosted
+# Homebrew tap and Scoop bucket. Trigger by pushing a tag: `git tag v0.1.0 &&
+# git push origin v0.1.0`. Validate locally with `goreleaser check`.
+version: 2
+
+project_name: vmbb
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: vmbb
+    main: ./cmd/vmbb
+    binary: vmbb
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+    # Reproducible builds: stamp the binary with the commit time, not now().
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    # The Go linker ad-hoc signs darwin/arm64 automatically, so these run on
+    # Apple Silicon without a separate signing step.
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: virtualmin
+    name: virtualmin-backup-browser
+
+homebrew_casks:
+  - name: vmbb
+    repository:
+      owner: virtualmin
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/virtualmin/virtualmin-backup-browser"
+    description: "Browse Virtualmin backup archives without Perl, GNU tar, or extra tools"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    # Intel macOS binaries aren't notarized; strip the download quarantine so
+    # they run without a Gatekeeper prompt. (arm64 is ad-hoc signed by Go.)
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/vmbb"]
+          end
+
+scoops:
+  - name: vmbb
+    repository:
+      owner: virtualmin
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: "https://github.com/virtualmin/virtualmin-backup-browser"
+    description: "Browse Virtualmin backup archives without Perl, GNU tar, or extra tools"
+    license: "GPL-3.0-or-later"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com

@@ -21,6 +21,9 @@
 /vmbb
 /vmbb.exe
 
+# GoReleaser output
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 

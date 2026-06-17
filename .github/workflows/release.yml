@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for changelog/version
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Writes the release to this repo.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Writes formula/manifest to the homebrew-tap and scoop-bucket repos.
+          # Create a PAT (fine-grained: contents:write on those two repos, or a
+          # classic token with `repo` scope) and add it as the TAP_GITHUB_TOKEN
+          # repository secret.
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

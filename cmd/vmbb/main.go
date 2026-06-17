@@ -14,6 +14,13 @@ import (
 	"github.com/virtualmin/virtualmin-backup-browser/internal/backup"
 )
 
+// Build metadata, overridden via -ldflags at release time by GoReleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 const usage = `vmbb - browse Virtualmin backup archives
 
 Usage:
@@ -44,6 +51,9 @@ func main() {
 		err = cmdCat(args)
 	case "extract":
 		err = cmdExtract(args)
+	case "version", "--version", "-v":
+		fmt.Printf("vmbb %s (commit %s, built %s)\n", version, commit, date)
+		return
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

@@ -47,12 +47,48 @@ the feature id. Global configuration lives under the pseudo-domain
 `virtualmin`. `.info`/`.dom` sidecar files (directory-format backups) use
 Webmin's `serialise_variable` encoding, decoded by `internal/serialise`.
 
-## Build
+## Install
+
+macOS / Linux (Homebrew):
+
+```
+brew install virtualmin/tap/vmbb
+```
+
+Windows (Scoop):
+
+```
+scoop bucket add virtualmin https://github.com/virtualmin/scoop-bucket
+scoop install vmbb
+```
+
+Or grab a binary from the [releases page](https://github.com/virtualmin/virtualmin-backup-browser/releases).
+A direct download may be flagged on first run because it is not notarized
+(macOS) or lacks SmartScreen reputation (Windows); the package managers above
+avoid that. To clear it manually on macOS: `xattr -d com.apple.quarantine ./vmbb`.
+
+## Build from source
 
 ```
 go build -o vmbb ./cmd/vmbb
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o vmbb.exe ./cmd/vmbb
 ```
+
+## Releasing
+
+Releases are automated with [GoReleaser](https://goreleaser.com). Pushing a tag
+cross-builds every target, publishes a GitHub release, and updates the Homebrew
+tap and Scoop bucket:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This requires a `TAP_GITHUB_TOKEN` repository secret: a token with write access
+to `virtualmin/homebrew-tap` and `virtualmin/scoop-bucket` (fine-grained with
+contents:write on both repos, or a classic token with `repo` scope). Validate
+config changes locally with `goreleaser check`.
 
 ## Status
 
