@@ -14,6 +14,7 @@ type Feature struct {
 // (e.g. "virtualmin-google-analytics") also land in the unknown bucket.
 var features = map[string]Feature{
 	"dir":        {"dir", "Home directory", "the domain's home directory (e.g. /home/<user>)"},
+	"unix":       {"unix", "Unix user", "the system login account (passwd/group) for the domain"},
 	"virtualmin": {"virtualmin", "Virtualmin metadata", "internal domain configuration restored by Virtualmin"},
 	"mysql":      {"mysql", "MySQL/MariaDB databases", "MySQL databases owned by the domain"},
 	"postgres":   {"postgres", "PostgreSQL databases", "PostgreSQL databases owned by the domain"},

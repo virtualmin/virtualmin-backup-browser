@@ -8,6 +8,19 @@
 *.so
 *.dylib
 
+# Sample/real backup archives used for local testing (too large for git).
+# Anchored to the repo root so intentional small fixtures under testdata/ are
+# unaffected.
+/*.tar
+/*.tar.gz
+/*.tar.bz2
+/*.tar.zst
+/*.zip
+
+# Built CLI binary
+/vmbb
+/vmbb.exe
+
 # Test binary, built with `go test -c`
 *.test
 

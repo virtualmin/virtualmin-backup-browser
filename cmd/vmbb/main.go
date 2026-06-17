@@ -19,6 +19,7 @@ const usage = `vmbb - browse Virtualmin backup archives
 Usage:
   vmbb list <backup>              Summarise domains and features
   vmbb tree <backup> [--deep]     List every member (--deep recurses nested archives)
+  vmbb info <backup> [domain]     Show decoded domain metadata
   vmbb cat <backup> <entry>       Write a member to stdout (nested: outer::inner)
   vmbb extract <backup> <entry> [-o dir]   Extract a member to disk
 
@@ -37,6 +38,8 @@ func main() {
 		err = cmdList(args)
 	case "tree":
 		err = cmdTree(args)
+	case "info":
+		err = cmdInfo(args)
 	case "cat":
 		err = cmdCat(args)
 	case "extract":
@@ -133,6 +136,80 @@ func cmdTree(args []string) error {
 		}
 		return nil
 	})
+}
+
+func cmdInfo(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("usage: vmbb info <backup> [domain]")
+	}
+	b, err := backup.Open(args[0])
+	if err != nil {
+		return err
+	}
+	want := ""
+	if len(args) == 2 {
+		want = args[1]
+	}
+	domains := b.Domains()
+	printed := 0
+	for _, d := range domains {
+		if d.Name == "virtualmin" {
+			continue // global config, not a domain
+		}
+		if want != "" && d.Name != want {
+			continue
+		}
+		if printed > 0 {
+			fmt.Println()
+		}
+		printDomainInfo(b.Path, d)
+		printed++
+	}
+	if want != "" && printed == 0 {
+		return fmt.Errorf("domain %q not found in backup", want)
+	}
+	return nil
+}
+
+// infoFields are the metadata keys worth surfacing, in display order, with
+// friendly labels. Keys absent from a given domain are skipped.
+var infoFields = []struct{ key, label string }{
+	{"dom", "Domain"},
+	{"owner", "Description"},
+	{"user", "Unix user"},
+	{"group", "Unix group"},
+	{"home", "Home directory"},
+	{"ip", "IPv4 address"},
+	{"ip6", "IPv6 address"},
+	{"parent", "Parent domain ID"},
+	{"template", "Template ID"},
+	{"plan", "Plan ID"},
+	{"created", "Created (epoch)"},
+}
+
+func printDomainInfo(backupPath string, d *backup.Domain) {
+	fmt.Printf("== %s ==\n", d.Name)
+
+	// The <domain>_virtualmin member holds the domain's key=value metadata.
+	metaName := d.Name + "_virtualmin"
+	if data, err := backup.ReadMember(backupPath, metaName); err == nil {
+		conf := backup.ParseConfig(data)
+		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		for _, f := range infoFields {
+			if v, ok := conf[f.key]; ok && v != "" {
+				fmt.Fprintf(tw, "  %s\t%s\n", f.label, v)
+			}
+		}
+		tw.Flush()
+	} else {
+		fmt.Printf("  (no %s metadata member)\n", metaName)
+	}
+
+	labels := make([]string, len(d.Features))
+	for i, id := range d.Features {
+		labels[i] = backup.LookupFeature(id).Label
+	}
+	fmt.Printf("  Backed-up data: %s\n", strings.Join(labels, ", "))
 }
 
 func cmdCat(args []string) error {
